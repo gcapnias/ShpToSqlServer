@@ -34,16 +34,22 @@ namespace ShpToSQL
     {
         private SqlConnectionString _cString;
         private FeatureDataTable _table;
+        private Envelope shapeExtends = null;
+        private int shapeSRID = -1;
 
         public MainWindow()
         {
             InitializeComponent();
+
             CustomInitialization();
         }
 
         private void CustomInitialization()
         {
             setControlAvailability(false);
+
+            _UseSRID.IsChecked = false;
+            _geometry.IsChecked = true;
         }
 
         public event PropertyChangedEventHandler PropertyChanged;
@@ -82,9 +88,11 @@ namespace ShpToSQL
         {
             if (!CheckFields()) return;
 
-            try 
-            { 
-                if (ImportFromShapefile(_shapefilePath.Text, CString.ToString())!=String.Empty) _status.Text = "Import has finished";            
+            _status.Text = "Importing data...";
+
+            try
+            {
+                if (ImportFromShapefile(_shapefilePath.Text, CString.ToString()) != String.Empty) _status.Text = "Import has finished";
             }
             catch (System.Data.SqlClient.SqlException)
             {
@@ -140,9 +148,14 @@ namespace ShpToSQL
             ShapeFile sf = new ShapeFile(shapeFilePath);
             sf.Encoding = Encoding.GetEncoding(int.Parse(_enconding.Text));
             sf.Open();
-            Envelope ext = sf.GetExtents();
+
+            this.shapeSRID = sf.SRID;
+            this.shapeExtends = sf.GetExtents();
+
+            _sRID.Text = this.shapeSRID.ToString();
+
             FeatureDataSet ds = new FeatureDataSet();
-            sf.ExecuteIntersectionQuery(ext, ds);
+            sf.ExecuteIntersectionQuery(this.shapeExtends, ds);
             //ds.Tables[0].Columns.Remove("Oid");
             return ds.Tables[0];
         }
@@ -154,25 +167,51 @@ namespace ShpToSQL
             //Define destination table
             DataTable bulkSqlTable = new DataTable();
             var newNames = _textBoxPanel.Children.OfType<TextBox>().ToList();
-               
+
             int rowNo = 0;
             foreach (DataColumn col in _table.Columns)
             {
                 bulkSqlTable.Columns.Add(newNames[rowNo++].Text, col.DataType);
             }
-            bulkSqlTable.Columns.Add("Geom", typeof(SqlGeometry));
+
+            if (_geometry.IsChecked == true)
+                bulkSqlTable.Columns.Add("Geom", typeof(SqlGeometry));
+            else
+                bulkSqlTable.Columns.Add("Geom", typeof(SqlGeography));
 
             //Populate destination table
             foreach (FeatureDataRow row in _table)
             {
                 rowNo = 0;
                 DataRow newTableRow = bulkSqlTable.NewRow();
-                
+
                 foreach (DataColumn col in _table.Columns)
                 {
                     newTableRow[newNames[rowNo++].Text] = row[col.ColumnName];
                 }
-                newTableRow["Geom"] = SqlGeometry.STGeomFromWKB(new SqlBytes(row.Geometry.AsBinary()), row.Geometry.SRID);
+
+
+                int srid = row.Geometry.SRID;
+                if (_UseSRID.IsChecked == true)
+                {
+                    int tempSRID = 0;
+                    if (int.TryParse(_sRID.Text, out tempSRID))
+                        srid = tempSRID;
+                }
+
+                if (_geometry.IsChecked == true)
+                {
+                    _sRID.Text = srid.ToString();
+                    newTableRow["Geom"] = SqlGeometry.STGeomFromWKB(new SqlBytes(row.Geometry.AsBinary()), srid);
+                }
+                else
+                {
+                    if (srid == 0)
+                        srid = 4623;
+
+                    _sRID.Text = srid.ToString();
+                    newTableRow["Geom"] = SqlGeography.STGeomFromWKB(new SqlBytes(row.Geometry.AsBinary()), srid);
+                }
 
                 bulkSqlTable.Rows.Add(newTableRow);
             }
@@ -190,7 +229,7 @@ namespace ShpToSQL
 
             //Save destination table
             using (SqlConnection connection = new SqlConnection(connectionString))
-            { 
+            {
                 SqlTransaction transaction = null;
                 connection.Open();
                 try
@@ -200,7 +239,7 @@ namespace ShpToSQL
                     SqlTableCreator tableCreator = new SqlTableCreator(connection, transaction);
                     tableCreator.DestinationTableName = _tableName.Text;
                     tableCreator.CreateFromDataTable(bulkSqlTable);
-                    
+
                     using (var sqlBulkCopy = new SqlBulkCopy(connection, SqlBulkCopyOptions.TableLock, transaction))
                     {
                         sqlBulkCopy.DestinationTableName = _tableName.Text;
@@ -215,7 +254,7 @@ namespace ShpToSQL
                     {
                         transaction.Rollback();
                     }
-                    
+
                     _status.Text = "Bad table name. Probabbly already exists. Check the primary key too.";
                     return String.Empty;
                 }
@@ -281,6 +320,17 @@ namespace ShpToSQL
         }
 
         #endregion Tools
+
+
+        private void _SRID_Checked(object sender, RoutedEventArgs e)
+        {
+            _sRID.IsEnabled = true;
+        }
+
+        private void _SRID_Unchecked(object sender, RoutedEventArgs e)
+        {
+            _sRID.IsEnabled = false;
+        }
 
 
     }

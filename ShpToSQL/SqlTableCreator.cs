@@ -218,6 +218,9 @@ namespace ShpToSQL
                 case "Microsoft.SqlServer.Types.SqlGeometry":
                     return "geometry";
 
+                case "Microsoft.SqlServer.Types.SqlGeography":
+                    return "geography";
+
                 default:
                     throw new Exception(type.ToString() + " not implemented.");
             }
